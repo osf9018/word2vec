@@ -17,8 +17,10 @@
 #include <string.h>
 #include <math.h>
 #include <pthread.h>
+#include <stdbool.h>
 
 #define MAX_STRING 100
+#define MAX_STRING_FILENAME 4096
 #define EXP_TABLE_SIZE 1000
 #define MAX_EXP 6
 #define MAX_SENTENCE_LENGTH 1000
@@ -32,12 +34,14 @@ struct vocab_word {
   long long cn;
   int *point;
   char *word, *code, codelen;
+  bool subsamp_flag;
 };
 
-char train_file[MAX_STRING], output_file[MAX_STRING];
-char save_vocab_file[MAX_STRING], read_vocab_file[MAX_STRING];
+char train_file[MAX_STRING_FILENAME], output_file[MAX_STRING_FILENAME];
+char save_vocab_file[MAX_STRING_FILENAME], read_vocab_file[MAX_STRING_FILENAME];
 struct vocab_word *vocab;
 int binary = 0, cbow = 1, debug_mode = 2, window = 5, min_count = 5, num_threads = 12, min_reduce = 1;
+int vocab_file_subsampl = 0;
 int *vocab_hash;
 long long vocab_max_size = 1000, vocab_size = 0, layer1_size = 100;
 long long train_words = 0, word_count_actual = 0, iter = 5, file_size = 0, classes = 0;
@@ -314,7 +318,30 @@ void SaveVocab() {
   fclose(fo);
 }
 
-void ReadVocab() {
+void ReadSubSamplingFlag(FILE *fin, char *eof, bool *format_error, bool *subsamp_flag) {
+  int ch;
+  *format_error = false;
+  ch = fgetc_unlocked(fin);  
+  if (ch == EOF) {
+    *eof = 1;
+    return;
+  }
+  if (ch == '0') {
+    *subsamp_flag = false;
+  }
+  else {
+    *subsamp_flag = true;
+  }
+  ch = fgetc_unlocked(fin);  
+  if (ch == EOF) {
+    *eof = 1;
+  }
+  else if ((ch != ' ') && (ch != '\t')) {
+    *format_error = true;
+  }
+}
+
+void ReadVocab(int vocab_file_subsampl) {
   long long a, i = 0;
   char c, eof = 0;
   char word[MAX_STRING];
@@ -326,10 +353,26 @@ void ReadVocab() {
   for (a = 0; a < vocab_hash_size; a++) vocab_hash[a] = -1;
   vocab_size = 0;
   while (1) {
+    bool subsamp_flag = true;
+    if (vocab_file_subsampl) {
+      // read subsampling flag
+      bool format_error;    
+      ReadSubSamplingFlag(fin, &eof, &format_error, &subsamp_flag);
+      if (eof) break;
+      if (format_error) {
+	fprintf(stderr, "Format error in vocabulary file when reading subsampling flag\n");
+	exit(1);
+      }
+    }
     ReadWord(word, fin, &eof);
     if (eof) break;
-    a = AddWordToVocab(word);
-    fscanf(fin, "%lld%c", &vocab[a].cn, &c);
+    a = AddWordToVocab(word);    
+    if (vocab_file_subsampl) vocab[a].subsamp_flag = subsamp_flag;
+    int item_nb = fscanf(fin, "%lld%c", &vocab[a].cn, &c);
+    if (item_nb != 2) {
+      fprintf(stderr, "Problem in reading the frequency of %s\n", word);
+	exit(1);
+    }
     i++;
   }
   SortVocab();
@@ -405,7 +448,7 @@ void *TrainModelThread(void *id) {
         word_count++;
         if (word == 0) break;
         // The subsampling randomly discards frequent words while keeping the ranking same
-        if (sample > 0) {
+        if ((sample > 0) && vocab[word].subsamp_flag) {
           real ran = (sqrt(vocab[word].cn / (sample * train_words)) + 1) * (sample * train_words) / vocab[word].cn;
           next_random = next_random * (unsigned long long)25214903917 + 11;
           if (ran < (next_random & 0xFFFF) / (real)65536) continue;
@@ -560,7 +603,7 @@ void TrainModel() {
   pthread_t *pt = (pthread_t *)malloc(num_threads * sizeof(pthread_t));
   printf("Starting training using file %s\n", train_file);
   starting_alpha = alpha;
-  if (read_vocab_file[0] != 0) ReadVocab(); else LearnVocabFromTrainFile();
+  if (read_vocab_file[0] != 0) ReadVocab(vocab_file_subsampl); else LearnVocabFromTrainFile();
   if (save_vocab_file[0] != 0) SaveVocab();
   if (output_file[0] == 0) return;
   InitNet();
@@ -676,6 +719,9 @@ int main(int argc, char **argv) {
     printf("\t\tThe vocabulary will be saved to <file>\n");
     printf("\t-read-vocab <file>\n");
     printf("\t\tThe vocabulary will be read from <file>, not constructed from the training data\n");
+    printf("\t-vocab-subsampl <int>\n");
+    printf("\t\tif set to 1 (and not 0), the first field of the vocabulary file indicates if the word can be \n");
+    printf("\t\tsubsampled (1) or not (0)\n");
     printf("\t-cbow <int>\n");
     printf("\t\tUse the continuous bag of words model; default is 1 (use 0 for skip-gram model)\n");
     printf("\nExamples:\n");
@@ -689,6 +735,7 @@ int main(int argc, char **argv) {
   if ((i = ArgPos((char *)"-train", argc, argv)) > 0) strcpy(train_file, argv[i + 1]);
   if ((i = ArgPos((char *)"-save-vocab", argc, argv)) > 0) strcpy(save_vocab_file, argv[i + 1]);
   if ((i = ArgPos((char *)"-read-vocab", argc, argv)) > 0) strcpy(read_vocab_file, argv[i + 1]);
+  if ((i = ArgPos((char *)"-vocab-subsampl", argc, argv)) > 0) vocab_file_subsampl = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-debug", argc, argv)) > 0) debug_mode = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-binary", argc, argv)) > 0) binary = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-cbow", argc, argv)) > 0) cbow = atoi(argv[i + 1]);
