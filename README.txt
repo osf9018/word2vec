@@ -1,4 +1,4 @@
-Tools for computing distributed representtion of words
+Tools for computing distributed representation of words
 ------------------------------------------------------
 
 We provide an implementation of the Continuous Bag-of-Words (CBOW) and the Skip-gram model (SG), as well as several demo scripts.
@@ -19,3 +19,6 @@ is finished, the user can interactively explore the similarity of the words.
 
 More information about the scripts is provided at https://code.google.com/p/word2vec/
 
+______________________________________________________
+
+see CHANGELOG.md for the list of the modifications to the Mikolov's code
